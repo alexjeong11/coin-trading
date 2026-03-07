@@ -5,6 +5,8 @@ import logging
 import datetime
 import traceback
 import python_bithumb
+import pandas as pd
+import numpy as np
 from dotenv import load_dotenv
   
 # 1. Logging Setup
@@ -112,6 +114,40 @@ def check_order_status(order_id):
         logger.error(f"Error checking order status {order_id}: {e}")
     return "unknown"
 
+def compute_atr_grid_spacing(ticker, default_spacing=0.01, period=14):
+    """
+    최근 일봉 데이터를 기반으로 ATR을 계산하여 동적인 그리드 간격(퍼센트)을 반환합니다.
+    시장의 변동성이 크면 간격을 넓히고, 작으면 좁히지만, 안전을 위해 최소/최대 한계치를 둡니다.
+    """
+    try:
+        df = python_bithumb.get_ohlcv(ticker)
+        if df is None or len(df) < period:
+            return default_spacing
+            
+        # ATR 계산
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        atr = true_range.rolling(period).mean().iloc[-1]
+        
+        current_price = df['close'].iloc[-1]
+        atr_percent = atr / current_price
+        
+        # 그리드 간격은 보통 ATR의 50% ~ 100%를 사용 (여기서는 50%를 한 칸 간격으로 설정)
+        dynamic_spacing = atr_percent * 0.5
+        
+        # 최소 0.5%, 최대 3%로 제한 
+        dynamic_spacing = max(0.005, min(0.03, dynamic_spacing))
+        
+        logger.info(f"📊 Dynamic ATR Grid Spacing Calculated: {dynamic_spacing*100:.2f}% (Raw ATR%: {atr_percent*100:.2f}%)")
+        return dynamic_spacing
+        
+    except Exception as e:
+        logger.error(f"Error computing ATR for grid spacing: {e}")
+        return default_spacing
+
 # 6. Grid Initialization & Logic
 def init_grid_bot():
     state = load_state()
@@ -120,18 +156,26 @@ def init_grid_bot():
         return state
 
     logger.info("Initializing new grid state...")
-    current_price = get_current_price_retry(TICKER)
+    current_price = python_bithumb.get_current_price(TICKER)
     if not current_price:
-        raise Exception("Cannot fetch current price for initialization.")
+        logger.error("Failed to fetch current price. Retrying...")
+        time.sleep(5)
+        return False
         
-    base_price = round(current_price / 1000) * 1000
-    grid_spacing_krw = round((base_price * GRID_STEP_RATIO) / 1000) * 1000
-    
-    # 10 Price Lines
+    # [전략 A 고도화] ATR을 이용한 동적 그리드 간격 계산
+    dynamic_spacing = compute_atr_grid_spacing(TICKER, default_spacing=GRID_STEP_RATIO)
+
+    # N개의 촘촘한 그리드 생성 (교차 매매를 위해 중앙 기준 위아래로 배치)
+    half_grid = GRID_COUNT // 2
     grids = []
-    half_lines = (GRID_COUNT + 1) // 2
-    for i in range(-half_lines, half_lines + 1):
-        grids.append(base_price + i * grid_spacing_krw)
+    
+    # 하단 그리드 (매수 대기선)
+    for i in range(half_grid, 0, -1):
+        grids.append(current_price * (1 - dynamic_spacing * i))
+    
+    # 상단 그리드 (매도 대기선) 
+    for i in range(1, GRID_COUNT - half_grid + 1):
+        grids.append(current_price * (1 + dynamic_spacing * i))
     
     grids = sorted(list(set(grids)))
     mid_idx = len(grids) // 2
@@ -239,16 +283,21 @@ def main():
                 lower_bound = min(state["grids"])
                 if current_price > upper_bound * 1.05 or current_price < lower_bound * 0.95:
                     logger.warning(f"🚨🚨 Price Out of Range! Current: {current_price:,.0f}, Range: [{lower_bound:,.0f} ~ {upper_bound:,.0f}]")
-                    logger.warning("Canceling all orders and pausing bot for safety...")
+                    logger.warning("Canceling all orders and resetting grids with new dynamic ATR spacing...")
                     # 모든 미체결 취소 
                     for _slot_id, _slot_data in slots.items():
                         _oid = _slot_data.get("order_id")
                         if _oid and _oid in open_ids:
                             bithumb.cancel_order(_oid)
-                            _slot_data["order_id"] = None
-                    save_state(state)
-                    logger.warning("Bot is suspended due to extreme price movement. Please review manually.")
-                    break # while 루프 완전 종료 (재시동 필요)
+                            
+                    # 그리드 상태 완전 초기화 후 다음 루프에서 재생성 유도 
+                    if os.path.exists(STATE_FILE):
+                        os.remove(STATE_FILE)
+                    
+                    logger.warning("Bot will rebuild the grid around the new price on next tick.")
+                    # break 대신 빈 dict로 덮어씌워서 while루프 상단에서 새로 init되게 만듬
+                    state = {}
+                    break
 
             state_changed = False
             for slot_id, slot_data in slots.items():

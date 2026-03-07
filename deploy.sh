@@ -4,8 +4,8 @@ echo "🚀 Bithumb Trading Bot 자동 배포를 시작합니다..."
 
 # 1. 기존에 돌고 있는 봇과 API 서버 안전하게 종료
 echo "🛑 기존 백그라운드 프로세스 종료 중..."
-pkill -f 'python bot.py'
-pkill -f 'python api_server.py'
+pkill -f 'bot\.py'
+pkill -f 'api_server\.py'
 sleep 2 # 프로세스가 완전히 죽을 때까지 대기
 
 # 2. OpenClaw 스킬 설정 업데이트 

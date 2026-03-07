@@ -49,13 +49,34 @@ Returns the Bithumb app-style real-time status of the bot's assets and open orde
     }
   ]
 }
-```
 ## Emergency Stop & Cancel All Orders
 
-If the user asks to stop trading, shut down the bot, or cancel all orders, hit the `/stop` endpoint:
+If the user asks### POST `/stop`
+Gracefully halts the bot by preventing new orders, canceling all open orders, and killing the process.
 
+**Usage:**
 ```bash
-curl -X POST -s http://127.0.0.1:8000/stop
+curl -X POST http://127.0.0.1:8000/stop
 ```
 
-Parse the JSON response to confirm to the user that the background process was killed and how many orders were successfully canceled.
+### POST `/config/budget`
+Dynamic Auto-Compounding Ceiling Control. Modifies the `MAX_BUDGET` (KRW) restriction for the bot while it is running. The bot will automatically reset its grid to use this new ceiling.
+
+**Usage:**
+```bash
+curl -X POST http://127.0.0.1:8000/config/budget \
+-H "Content-Type: application/json" \
+-d '{"max_budget": 300000}'
+```
+
+**Response Example:**
+```json
+{
+  "success": true,
+  "message": "MAX_BUDGET updated to 300,000 KRW. Bot grid will reset shortly."
+}
+```
+
+---
+
+## Behavior Rulesponse to confirm to the user that the background process was killed and how many orders were successfully canceled.

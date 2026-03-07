@@ -3,8 +3,10 @@ import json
 import time
 import subprocess
 import python_bithumb
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from dotenv import load_dotenv
+from pydantic import BaseModel
+import math
 
 # 1. Config & Env
 load_dotenv()
@@ -18,7 +20,14 @@ bithumb = python_bithumb.Bithumb(CON_KEY, SEC_KEY)
 
 TICKER = "KRW-ETH"
 TARGET_COIN = "ETH"
-INITIAL_BUDGET = 100000.0
+try:
+    INITIAL_BUDGET = float(os.getenv("INITIAL_BUDGET", "100000"))
+except ValueError:
+    INITIAL_BUDGET = 100000.0
+
+# Models
+class BudgetUpdate(BaseModel):
+    max_budget: float
 
 app = FastAPI(title="Bithumb Trading Bot Controller")
 
@@ -136,6 +145,42 @@ def status():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/config/budget")
+def update_max_budget(config: BudgetUpdate = Body(...)):
+    """Update the MAX_BUDGET ceiling in .env dynamically"""
+    try:
+        env_file = ".env"
+        if not os.path.exists(env_file):
+            raise HTTPException(status_code=500, detail=".env file not found")
+            
+        with open(env_file, 'r') as f:
+            lines = f.readlines()
+            
+        budget_found = False
+        with open(env_file, 'w') as f:
+            for line in lines:
+                if line.startswith("MAX_BUDGET="):
+                    f.write(f"MAX_BUDGET={config.max_budget}\n")
+                    budget_found = True
+                else:
+                    f.write(line)
+            
+            if not budget_found:
+                f.write(f"\nMAX_BUDGET={config.max_budget}\n")
+                
+        # Update current process env just in case
+        os.environ["MAX_BUDGET"] = str(config.max_budget)
+        
+        # grid_state.json을 지워서 bot.py의 다음 루프 때 init_grid_bot()가 강제로 돌아서 
+        # 즉시 새로운 MAX_BUDGET을 적용하도록 트리거함.
+        if os.path.exists("grid_state.json"):
+            os.remove("grid_state.json")
+            
+        return {"success": True, "message": f"MAX_BUDGET updated to {config.max_budget:,.0f} KRW. Bot grid will reset shortly."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/stop")
 def stop_bot():

@@ -36,12 +36,21 @@ bithumb = python_bithumb.Bithumb(CON_KEY, SEC_KEY)
 # 3. Grid Strategy Config
 TICKER = "KRW-ETH"
 TARGET_COIN = "ETH"
-TOTAL_BUDGET = 100000
-GRID_COUNT = 9 # Number of grid slots (10 price lines)
-GRID_STEP_RATIO = 0.01  # 1% spacing per grid (상/하단 박스권)
 STATE_FILE = "grid_state.json"
 
-ORDER_KRW = TOTAL_BUDGET / GRID_COUNT # approx 11,111 KRW per slot
+try:
+    INITIAL_BUDGET = float(os.getenv("INITIAL_BUDGET", "100000"))
+    MAX_BUDGET_CEILING = float(os.getenv("MAX_BUDGET", "200000"))
+    GRID_COUNT = int(os.getenv("GRID_COUNT", "10"))
+    GRID_STEP_RATIO = float(os.getenv("GRID_STEP_RATIO", "0.01"))
+except ValueError:
+    logger.error("Invalid configuration in .env. Resorting to defaults.")
+    INITIAL_BUDGET = 100000.0
+    MAX_BUDGET_CEILING = 200000.0
+    GRID_COUNT = 10
+    GRID_STEP_RATIO = 0.01
+
+ORDER_KRW = INITIAL_BUDGET / GRID_COUNT # approx 11,111 KRW per slot
 
 # 4. State Management
 def load_state():
@@ -151,17 +160,48 @@ def compute_atr_grid_spacing(ticker, default_spacing=0.01, period=14):
 # 6. Grid Initialization & Logic
 def init_grid_bot():
     state = load_state()
-    if state is not None:
+    if state:
         logger.info("Existing grid state found. Resuming grid trading...")
         return state
 
-    logger.info("Initializing new grid state...")
+    logger.info("Initializing new grid state with Auto-Compounding...")
     current_price = python_bithumb.get_current_price(TICKER)
     if not current_price:
         logger.error("Failed to fetch current price. Retrying...")
         time.sleep(5)
         return False
         
+    # [전략 C 고도화] 자산 평가 기반 (Auto-Compounding) + 상한선 구조
+    active_budget = INITIAL_BUDGET
+    order_krw = active_budget / GRID_COUNT
+    try:
+        krw_balances = python_bithumb.get_balance(TICKER)
+        if krw_balances:
+            # get_balance returns: (total_krw, in_use_krw, total_coin, in_use_coin)
+            # We use python_bithumb wrapper's standard output or fallback to raw
+            krw_total = krw_balances[0]
+            coin_total = krw_balances[2]
+            
+            # evaluate total asset
+            total_eval_krw = krw_total + (coin_total * current_price)
+            # Active budget is capped by MAX_BUDGET_CEILING
+            active_budget = min(total_eval_krw, MAX_BUDGET_CEILING)
+            # Ensure it doesn't drop below the initial minimum (e.g., 10만원)
+            active_budget = max(active_budget, INITIAL_BUDGET)
+            
+            order_krw = active_budget / GRID_COUNT
+            logger.info(f"💰 Auto-Compounded Budget: {active_budget:,.0f} KRW (Total Asset: {total_eval_krw:,.0f} KRW, Ceiling: {MAX_BUDGET_CEILING:,.0f} KRW)")
+            logger.info(f"💰 New Lot Size per grid: {order_krw:,.0f} KRW")
+        else:
+            logger.warning("Could not fetch balance, using INITIAL_BUDGET for active_budget.")
+            active_budget = INITIAL_BUDGET
+            order_krw = active_budget / GRID_COUNT
+            
+    except Exception as e:
+        logger.error(f"Error evaluating assets for auto-compounding: {e}. Using INITIAL_BUDGET.")
+        active_budget = INITIAL_BUDGET
+        order_krw = active_budget / GRID_COUNT
+
     # [전략 A 고도화] ATR을 이용한 동적 그리드 간격 계산
     dynamic_spacing = compute_atr_grid_spacing(TICKER, default_spacing=GRID_STEP_RATIO)
 
@@ -194,7 +234,7 @@ def init_grid_bot():
             slot_state = "KRW"
         else:
             slot_state = "ETH"
-            eth_to_buy_krw += ORDER_KRW
+            eth_to_buy_krw += order_krw # Use dynamic order_krw
             
         slots[str(i)] = {
             "state": slot_state,
@@ -216,7 +256,9 @@ def init_grid_bot():
     state = {
         "grids": grids,
         "slots": slots,
-        "init_time": datetime.datetime.now().isoformat()
+        "init_time": datetime.datetime.now().isoformat(),
+        "active_budget": active_budget, # Store active budget
+        "lot_size": order_krw # Store lot size
     }
     save_state(state)
     logger.info("Grid initialized and saved.")
@@ -229,10 +271,18 @@ def place_limit_order(slot_id, slot_data):
     """
     time.sleep(0.3) # API Rate Limit 보호를 위한 지연 
     
+    # Retrieve lot_size from the current state (fallback to order_krw)
+    current_state = load_state()
+    if not current_state:
+        logger.error("Could not retrieve state. Cannot place order.")
+        return False
+        
+    order_krw = current_state.get("lot_size", ORDER_KRW)
+
     try:
         if slot_data["state"] == "KRW":
             price = slot_data["buy_price"]
-            volume = round(ORDER_KRW / price, 4)
+            volume = round(order_krw / price, 4) # Use dynamic order_krw
             logger.info(f"Placing BUY Limit: Slot {slot_id} / Price: {price:,.0f} / Vol: {volume}")
             order = bithumb.buy_limit_order(TICKER, price, volume)
             order_id = extract_order_id(order)
@@ -240,7 +290,7 @@ def place_limit_order(slot_id, slot_data):
         elif slot_data["state"] == "ETH":
             price = slot_data["sell_price"]
             # 매도 볼륨은 매수했던 볼륨과 동일하게 설정하여 교차 차익(KRW)을 남김
-            volume = round(ORDER_KRW / slot_data["buy_price"], 4) 
+            volume = round(order_krw / slot_data["buy_price"], 4) # Use dynamic order_krw
             logger.info(f"Placing SELL Limit: Slot {slot_id} / Price: {price:,.0f} / Vol: {volume}")
             order = bithumb.sell_limit_order(TICKER, price, volume)
             order_id = extract_order_id(order)
@@ -257,10 +307,18 @@ def place_limit_order(slot_id, slot_data):
 
 # 7. Main Loop
 def main():
-    logger.info(f"Starting Bithumb Grid Trading Bot ({TICKER})... Total Budget: {TOTAL_BUDGET:,.0f} KRW")
+    # TOTAL_BUDGET is no longer a global constant, it's dynamic.
+    # We will log the active_budget from the state after initialization.
     
     try:
         state = init_grid_bot()
+        if not state: # init_grid_bot can return False on failure
+            logger.error("Failed to initialize grid bot. Exiting.")
+            return
+            
+        # Fallback for old state files without active_budget
+        active_budget = state.get('active_budget', INITIAL_BUDGET)
+        logger.info(f"Starting Bithumb Grid Trading Bot ({TICKER})... Active Budget: {active_budget:,.0f} KRW")
     except Exception as e:
         logger.error(f"Fatal error during initialization: {e}")
         return
@@ -296,7 +354,7 @@ def main():
                     
                     logger.warning("Bot will rebuild the grid around the new price on next tick.")
                     # break 대신 빈 dict로 덮어씌워서 while루프 상단에서 새로 init되게 만듬
-                    state = {}
+                    state = {} # This will cause init_grid_bot to be called again
                     break
 
             state_changed = False

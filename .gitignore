@@ -1,0 +1,9 @@
+venv/
+.env
+*.log
+*.out
+*.json
+__pycache__/
+jocoding-bithumb/
+skills/
+.DS_Store

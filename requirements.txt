@@ -1,0 +1,7 @@
+python-bithumb
+python-dotenv
+pandas
+schedule
+requests
+fastapi
+uvicorn

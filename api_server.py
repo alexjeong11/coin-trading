@@ -23,11 +23,20 @@ INITIAL_BUDGET = 100000.0
 app = FastAPI(title="Bithumb Trading Bot Controller")
 
 # 2. Helper Functions
-def get_balance(currency):
-    balances = bithumb.get_balance(currency)
+def get_balance_raw(currency):
+    balances = bithumb.get_balances()
     if not balances or type(balances) is not list or len(balances) == 0:
+        return None
+    for bal in balances:
+        if bal.get('currency') == currency:
+            return bal
+    return None
+
+def get_total_balance(currency):
+    bal = get_balance_raw(currency)
+    if not bal:
         return 0.0
-    return float(balances[0].get('balance', 0))
+    return float(bal.get('balance', 0)) + float(bal.get('locked', 0))
 
 def get_open_orders():
     orders = bithumb.get_orders(TICKER)
@@ -66,32 +75,64 @@ def cancel_all_orders():
 def status():
     """현재 자산 상태, 수익률 및 다가오는 미체결 주문 현황 반환"""
     try:
-        # A. 시세 및 잔고 확인
+        # A. 시세 확인
         current_price = python_bithumb.get_current_price(TICKER)
-        krw_bal = get_balance("KRW")
-        eth_bal = get_balance(TARGET_COIN)
         
-        # B. 총 자산 평가 및 수익률 계산
-        eth_value_krw = eth_bal * current_price
-        total_asset_krw = krw_bal + eth_value_krw
-        yield_pct = ((total_asset_krw - INITIAL_BUDGET) / INITIAL_BUDGET) * 100
+        # B. 잔고 구조체 (KRW, ETH)
+        krw_bal = get_balance_raw("KRW") or {}
+        eth_bal = get_balance_raw(TARGET_COIN) or {}
         
-        # C. 미체결 주문 현황
+        krw_total = float(krw_bal.get('balance', 0)) + float(krw_bal.get('locked', 0))
+        krw_avail = float(krw_bal.get('balance', 0))
+        krw_locked = float(krw_bal.get('locked', 0))
+        
+        eth_total = float(eth_bal.get('balance', 0)) + float(eth_bal.get('locked', 0))
+        eth_avail = float(eth_bal.get('balance', 0))
+        eth_locked = float(eth_bal.get('locked', 0))
+        
+        # C. 빗썸 모바일 앱 스타일 손익 평가 (ETH 기준)
+        avg_buy_price = float(eth_bal.get('avg_buy_price', 0))
+        buy_amount = round(eth_total * avg_buy_price)
+        eval_amount = round(eth_total * current_price)
+        unrealized_pnl = eval_amount - buy_amount
+        yield_percent = round((unrealized_pnl / buy_amount * 100), 2) if buy_amount > 0 else 0.0
+        
+        # 총 자산 (코인 평가금액 + 원화 보유 총합)
+        total_asset_krw = krw_total + eval_amount
+
+        # D. 주문 목록 
         open_orders = get_open_orders()
-        
+        formatted_orders = []
+        for o in open_orders:
+            formatted_orders.append({
+                "order_id": o.get('order_id'),
+                "type": o.get('type'),
+                "price": o.get('price'),
+                "units": o.get('units'),
+                "units_remaining": o.get('units_remaining')
+            })
+
         return {
             "success": True,
             "ticker": TICKER,
             "current_price_krw": current_price,
-            "bot_initial_budget": INITIAL_BUDGET,
-            "total_asset_krw": round(total_asset_krw, 0),
-            "yield_percent": round(yield_pct, 2),
-            "balances": {
-                "krw": round(krw_bal, 0),
-                "eth": round(eth_bal, 4)
+            "total_asset_krw": round(total_asset_krw),
+            "asset_evaluation": {
+                "coin": TARGET_COIN,
+                "quantity": round(eth_total, 8),
+                "avg_buy_price": round(avg_buy_price),
+                "buy_amount_krw": buy_amount,
+                "eval_amount_krw": eval_amount,
+                "unrealized_pnl_krw": unrealized_pnl,
+                "yield_percent": yield_percent
             },
-            "open_orders_count": len(open_orders),
-            "open_orders": open_orders
+            "krw_status": {
+                "avail": round(krw_avail),
+                "locked_in_orders": round(krw_locked),
+                "total": round(krw_total)
+            },
+            "open_orders_count": len(formatted_orders),
+            "open_orders": formatted_orders
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

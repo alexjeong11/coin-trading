@@ -14,13 +14,42 @@ To check the current status, asset value, yield (%), and open orders, use the fo
 ```bash
 curl -s http://127.0.0.1:8000/status
 ```
+### GET `/status`
+Returns the Bithumb app-style real-time status of the bot's assets and open orders.
 
-Parse the JSON response and present it clearly to the user. Mention:
-1. Current ETH Price
-2. Total Asset in KRW and Yield Percentage
-3. Balances (KRW & ETH)
-4. Open Grid Orders Count
-
+**Response Example:**
+```json
+{
+  "success": true,
+  "ticker": "KRW-ETH",
+  "current_price_krw": 2917000.0,
+  "total_asset_krw": 110773,
+  "asset_evaluation": {
+    "coin": "ETH",
+    "quantity": 0.01770000,
+    "avg_buy_price": 2912859,
+    "buy_amount_krw": 51558,
+    "eval_amount_krw": 51631,
+    "unrealized_pnl_krw": 73,
+    "yield_percent": 0.14
+  },
+  "krw_status": {
+    "avail": 3538,
+    "locked_in_orders": 55616,
+    "total": 59154
+  },
+  "open_orders_count": 9,
+  "open_orders": [
+    {
+      "order_id": "C010...",
+      "type": "ask",
+      "price": "3034000",
+      "units": "0.0037",
+      "units_remaining": "0.0037"
+    }
+  ]
+}
+```
 ## Emergency Stop & Cancel All Orders
 
 If the user asks to stop trading, shut down the bot, or cancel all orders, hit the `/stop` endpoint:

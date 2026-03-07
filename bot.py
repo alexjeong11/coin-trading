@@ -6,7 +6,7 @@ import datetime
 import traceback
 import python_bithumb
 from dotenv import load_dotenv
-
+  
 # 1. Logging Setup
 logger = logging.getLogger("GridBot")
 logger.setLevel(logging.INFO)
@@ -97,6 +97,20 @@ def extract_order_id(order_resp):
     elif type(order_resp) is str:
         return order_resp
     return None
+
+def check_order_status(order_id):
+    """
+    주문 uuid를 통해 해당 주문의 상태(done, cancel, wait 등)를 반환합니다.
+    """
+    try:
+        order_info = bithumb.get_order(order_id)
+        if type(order_info) is dict and 'state' in order_info:
+            return order_info['state']
+        elif type(order_info) is dict and 'data' in order_info and 'state' in order_info['data']:
+            return order_info['data']['state']
+    except Exception as e:
+        logger.error(f"Error checking order status {order_id}: {e}")
+    return "unknown"
 
 # 6. Grid Initialization & Logic
 def init_grid_bot():
@@ -217,6 +231,25 @@ def main():
                 time.sleep(5)
                 continue
                 
+            current_price = get_current_price_retry(TICKER)
+            
+            # [전략 C] Out of Range 안전 장치
+            if current_price:
+                upper_bound = max(state["grids"])
+                lower_bound = min(state["grids"])
+                if current_price > upper_bound * 1.05 or current_price < lower_bound * 0.95:
+                    logger.warning(f"🚨🚨 Price Out of Range! Current: {current_price:,.0f}, Range: [{lower_bound:,.0f} ~ {upper_bound:,.0f}]")
+                    logger.warning("Canceling all orders and pausing bot for safety...")
+                    # 모든 미체결 취소 
+                    for _slot_id, _slot_data in slots.items():
+                        _oid = _slot_data.get("order_id")
+                        if _oid and _oid in open_ids:
+                            bithumb.cancel_order(_oid)
+                            _slot_data["order_id"] = None
+                    save_state(state)
+                    logger.warning("Bot is suspended due to extreme price movement. Please review manually.")
+                    break # while 루프 완전 종료 (재시동 필요)
+
             state_changed = False
             for slot_id, slot_data in slots.items():
                 current_order_id = slot_data.get("order_id")
@@ -229,16 +262,28 @@ def main():
                 
                 # 열려있는 주문 목록에 없다면 체결(혹은 취소)된 것으로 판단
                 if current_order_id not in open_ids:
-                    if slot_data["state"] == "KRW":
-                        logger.info(f"🎉 Slot {slot_id} BUY Filled at {slot_data['buy_price']:,.0f} KRW! Reversing to SELL.")
-                        slot_data["state"] = "ETH"
-                    else:
-                        logger.info(f"🎉 Slot {slot_id} SELL Filled at {slot_data['sell_price']:,.0f} KRW! Reversing to BUY.")
-                        slot_data["state"] = "KRW"
+                    # [전략 A 보완] 실제로 체결되었는지 빗썸 거래내역에 질의하여 검증
+                    order_status = check_order_status(current_order_id)
+                    time.sleep(0.3) # API Limit 방지
+                    
+                    if order_status == "done":
+                        if slot_data["state"] == "KRW":
+                            logger.info(f"🎉 Slot {slot_id} BUY Filled at {slot_data['buy_price']:,.0f} KRW! Reversing to SELL.")
+                            slot_data["state"] = "ETH"
+                        else:
+                            logger.info(f"🎉 Slot {slot_id} SELL Filled at {slot_data['sell_price']:,.0f} KRW! Reversing to BUY.")
+                            slot_data["state"] = "KRW"
                         
-                    slot_data["order_id"] = None
-                    state_changed = True
-                    # 다음 loop 에서 자동으로 반대 주문이 생성됨
+                        slot_data["order_id"] = None
+                        state_changed = True
+                        
+                    elif order_status in ["cancel", "unknown"]:
+                        # 주문이 사용자 수동/에러/기한만료로 취소된 경우 상태 유지하고 주문만 비움
+                        logger.warning(f"⚠️ Slot {slot_id} Order {current_order_id} was CANCELED or is UNKNOWN. Re-submitting identical order.")
+                        slot_data["order_id"] = None
+                        state_changed = True
+                        
+                    # 다음 loop 에서 자동으로 해당 state에 맞는 주문이 다시 생성됨
                     
             if state_changed:
                 save_state(state)

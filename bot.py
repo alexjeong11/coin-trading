@@ -157,6 +157,25 @@ def compute_atr_grid_spacing(ticker, default_spacing=0.01, period=14):
         logger.error(f"Error computing ATR for grid spacing: {e}")
         return default_spacing
 
+def round_to_tick(price):
+    """
+    빗썸 호가단위(Tick Size)에 맞게 가격을 반올림합니다.
+    (예: 100만원 이상 -> 1000원 단위)
+    """
+    if price >= 1000000:
+        return round(price / 1000) * 1000
+    elif price >= 100000:
+        return round(price / 100) * 100
+    elif price >= 10000:
+        return round(price / 10) * 10
+    elif price >= 1000:
+        return round(price)
+    elif price >= 100:
+        return round(price, 1)
+    elif price >= 10:
+        return round(price, 2)
+    return round(price, 4)
+
 # 6. Grid Initialization & Logic
 def init_grid_bot():
     state = load_state()
@@ -175,17 +194,24 @@ def init_grid_bot():
     active_budget = INITIAL_BUDGET
     order_krw = active_budget / GRID_COUNT
     try:
-        krw_balances = python_bithumb.get_balance(TICKER)
-        if krw_balances:
-            # get_balance returns: (total_krw, in_use_krw, total_coin, in_use_coin)
-            # We use python_bithumb wrapper's standard output or fallback to raw
-            krw_total = krw_balances[0]
-            coin_total = krw_balances[2]
+        krw_total = 0.0
+        coin_total = 0.0
+        bals = bithumb.get_balances()
+        if type(bals) is list:
+            for b in bals:
+                if b.get('currency') == 'KRW':
+                    krw_total = float(b.get('balance', 0)) + float(b.get('locked', 0))
+                elif b.get('currency') == TARGET_COIN:
+                    coin_total = float(b.get('balance', 0)) + float(b.get('locked', 0))
             
             # evaluate total asset
             total_eval_krw = krw_total + (coin_total * current_price)
             # Active budget is capped by MAX_BUDGET_CEILING
             active_budget = min(total_eval_krw, MAX_BUDGET_CEILING)
+            
+            # 수수료 및 호가단위 버퍼를 위해 평가 자산의 95%만 활용합니다
+            active_budget = active_budget * 0.95
+            
             # Ensure it doesn't drop below the initial minimum (e.g., 10만원)
             active_budget = max(active_budget, INITIAL_BUDGET)
             
@@ -193,7 +219,7 @@ def init_grid_bot():
             logger.info(f"💰 Auto-Compounded Budget: {active_budget:,.0f} KRW (Total Asset: {total_eval_krw:,.0f} KRW, Ceiling: {MAX_BUDGET_CEILING:,.0f} KRW)")
             logger.info(f"💰 New Lot Size per grid: {order_krw:,.0f} KRW")
         else:
-            logger.warning("Could not fetch balance, using INITIAL_BUDGET for active_budget.")
+            logger.warning("Could not fetch balances, using INITIAL_BUDGET for active_budget.")
             active_budget = INITIAL_BUDGET
             order_krw = active_budget / GRID_COUNT
             
@@ -205,22 +231,31 @@ def init_grid_bot():
     # [전략 A 고도화] ATR을 이용한 동적 그리드 간격 계산
     dynamic_spacing = compute_atr_grid_spacing(TICKER, default_spacing=GRID_STEP_RATIO)
 
-    # N개의 촘촘한 그리드 생성 (교차 매매를 위해 중앙 기준 위아래로 배치)
-    half_grid = GRID_COUNT // 2
+    # N개의 슬롯을 위한 GRID_COUNT + 1 개의 촘촘한 그리드 선 생성
+    num_price_points = GRID_COUNT + 1
+    half_points = num_price_points // 2
     grids = []
     
-    # 하단 그리드 (매수 대기선)
-    for i in range(half_grid, 0, -1):
+    # 하단 가격대
+    for i in range(half_points, 0, -1):
         grids.append(current_price * (1 - dynamic_spacing * i))
+        
+    # 현재가 포함
+    grids.append(current_price)
     
-    # 상단 그리드 (매도 대기선) 
-    for i in range(1, GRID_COUNT - half_grid + 1):
+    # 상단 가격대
+    for i in range(1, num_price_points - half_points):
         grids.append(current_price * (1 + dynamic_spacing * i))
     
+    # 빗썸 호가단위에 맞춰 반올림 후 중복제거
+    grids = [round_to_tick(p) for p in grids]
     grids = sorted(list(set(grids)))
-    mid_idx = len(grids) // 2
-    start_idx = mid_idx - (GRID_COUNT + 1) // 2
-    grids = grids[start_idx : start_idx + GRID_COUNT + 1]
+    
+    # 길이가 의도한 것 보다 길어졌을 때만 자르기 (floating point 등)
+    if len(grids) > num_price_points:
+        mid_idx = len(grids) // 2
+        start_idx = max(0, mid_idx - num_price_points // 2)
+        grids = grids[start_idx : start_idx + num_price_points]
 
     slots = {}
     eth_to_buy_krw = 0
@@ -244,10 +279,22 @@ def init_grid_bot():
         }
 
     # Market buy initial ETH required for the "ETH" slots
-    logger.info(f"Grid Initialization: Buying {eth_to_buy_krw:,.0f} KRW worth of {TARGET_COIN} for initial sell limits.")
-    if eth_to_buy_krw >= 5000: # 최소주문액 확인
+    eth_to_buy_units = round(eth_to_buy_krw / current_price, 4)
+    # 가지고 있는 코인 수량을 차감하여 부족한 만큼만 매수
+    eth_to_buy_units = max(0.0, eth_to_buy_units - coin_total)
+    krw_needed_to_buy = eth_to_buy_units * current_price
+    
+    # 빗썸 최소 주문금액 (5000원) 처리 + 슬리피지 버퍼: 조금이라도 사야한다면 최소 5100원어치 매수 (안전마진)
+    if 0 < krw_needed_to_buy < 5000:
+        eth_to_buy_units = round(5100 / current_price, 4)
+        krw_needed_to_buy = eth_to_buy_units * current_price
+        logger.info(f"Grid Initialization: Adjusted buy amount to meet 5000 KRW safe minimum.")
+
+    logger.info(f"Grid Initialization: Need to buy {eth_to_buy_units:.4f} ETH ({krw_needed_to_buy:,.0f} KRW) out of {coin_total:.4f} already owned.")
+    
+    if krw_needed_to_buy >= 5000: # 최소주문액 확인
         try:
-            order = bithumb.buy_market_order(TICKER, eth_to_buy_krw)
+            order = bithumb.buy_market_order(TICKER, krw_needed_to_buy)
             logger.info(f"Initial Market Buy Executed: {order}")
         except Exception as e:
             logger.error(f"Failed to execute initial market buy: {e}")
@@ -300,8 +347,16 @@ def place_limit_order(slot_id, slot_data):
             return True
         else:
             logger.warning(f"Failed to place limit order for Slot {slot_id}. Response: {order}")
+            if "insufficient_funds" in str(order).lower() or "주문가능한" in str(order):
+                slot_data["insufficient_funds"] = True
+                logger.warning(f"Slot {slot_id} paused due to insufficient funds.")
     except Exception as e:
-        logger.error(f"Exception during order placement for Slot {slot_id}: {e}")
+        error_msg = str(e)
+        if "insufficient_funds" in error_msg.lower() or "주문가능한" in error_msg:
+            slot_data["insufficient_funds"] = True
+            logger.warning(f"Slot {slot_id} paused due to insufficient funds. Will retry when balance changes.")
+        else:
+            logger.error(f"Exception during order placement for Slot {slot_id}: {e}")
         
     return False
 
@@ -363,6 +418,9 @@ def main():
                 
                 # 주문 내역이 없는 슬롯은 새로 생성
                 if not current_order_id:
+                    if slot_data.get("insufficient_funds"):
+                        continue # 자금 부족으로 일시정지된 슬롯은 건너뜀
+                        
                     if place_limit_order(slot_id, slot_data):
                         state_changed = True
                     continue
@@ -382,6 +440,12 @@ def main():
                             slot_data["state"] = "KRW"
                         
                         slot_data["order_id"] = None
+                        
+                        # 하나의 그리드라도 체결되면 자금 상황이 바뀌었으므로 정지된 모든 슬롯의 플래그를 해제하고 재시도
+                        for s_id in slots:
+                            if slots[s_id].get("insufficient_funds"):
+                                slots[s_id]["insufficient_funds"] = False
+                                
                         state_changed = True
                         
                     elif order_status in ["cancel", "unknown"]:

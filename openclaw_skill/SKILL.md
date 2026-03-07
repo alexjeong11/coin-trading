@@ -79,4 +79,9 @@ curl -X POST http://127.0.0.1:8000/config/budget \
 
 ---
 
-## Behavior Rulesponse to confirm to the user that the background process was killed and how many orders were successfully canceled.
+## Behavior Rules
+
+1. **Status Checks**: When the user asks for the status, call the `/status` endpoint and format the JSON response nicely, showing the current price, asset evaluation (quantity, avg buy price, PnL, yield), and the KRW status.
+2. **Budget Management**: If the user asks to "reinvest up to X amount" or "change the investment limit", use the `POST /config/budget` endpoint with the requested `max_budget` in KRW.
+3. **Graceful Pauses**: Note that if some grid slots are missing funds, the bot will gracefully "pause" them in the background until funds are available again.
+4. **Emergency Stop**: Use `POST /stop` if the user wants to kill the bot and cancel all orders. Confirm to the user how many orders were canceled.

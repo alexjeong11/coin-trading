@@ -77,11 +77,40 @@ curl -X POST http://127.0.0.1:8000/config/budget \
 }
 ```
 
+## 2. Local Bot Lifecycle Management (Shell Commands)
+
+If the API is down or the user asks to "start", "restart", or "hard stop" the bot, you must execute the following commands in the project directory (`/Users/jeongcheol/Documents/ai-projects/coin-trading`):
+
+### Start / Restart Bot
+Use the automated deployment script which gracefully kills old processes, syncs this skill file, and starts the system in the background via `nohup`.
+```bash
+./deploy.sh
+```
+
+### Hard Stop (Kill Processes)
+If the `/stop` API fails or the user specifically asks to kill the background scripts without canceling Bithumb orders.
+```bash
+pkill -f 'bot\.py'
+pkill -f 'api_server\.py'
+```
+
+### Check Logs (Debugging)
+To view the bot's live trading decisions or system errors:
+```bash
+# View trading logic and order placements
+tail -n 30 trade.log
+
+# View system/API server execution output
+tail -n 30 nohup.out
+```
+
 ---
 
 ## Behavior Rules
 
-1. **Status Checks**: When the user asks for the status, call the `/status` endpoint and format the JSON response nicely, showing the current price, asset evaluation (quantity, avg buy price, PnL, yield), and the KRW status.
+1. **Status Checks**: When the user asks for the status, call the HTTP `/status` endpoint and format the JSON response nicely, showing the current price, asset evaluation (quantity, avg buy price, PnL, yield), and the KRW status.
 2. **Budget Management**: If the user asks to "reinvest up to X amount" or "change the investment limit", use the `POST /config/budget` endpoint with the requested `max_budget` in KRW.
 3. **Graceful Pauses**: Note that if some grid slots are missing funds, the bot will gracefully "pause" them in the background until funds are available again.
-4. **Emergency Stop**: Use `POST /stop` if the user wants to kill the bot and cancel all orders. Confirm to the user how many orders were canceled.
+4. **Emergency Stop**: Try using `POST /stop` first if the user wants to kill the bot and cancel all orders. Confirm how many orders were canceled. If the API is dead, use the `pkill` bash command.
+5. **Start/Restart**: If the user asks to start the bot, run `./deploy.sh` in the project directory.
+6. **Logs**: If the user asks what the bot is doing or why it failed, read `trade.log` or `nohup.out`.

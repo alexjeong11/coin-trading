@@ -5,9 +5,15 @@ description: Bithumb Trading Bot Status & Control Skill
 
 # Bithumb Trading Bot Controller
 
-You can monitor and control the local Bithumb trading bot using its HTTP API. The bot operates on `KRW-ETH` using a Grid Trading strategy.
+You can monitor and control the local Bithumb trading bot using its HTTP API. The bot operates on `KRW-ETH` using an aggressively tight Grid Trading strategy.
 
-## Check Status & Yield
+### 💡 Core Technical Context (Crucial for AI Assistant)
+1. **Aggressive Grid Spacing**: The bot uses Dynamic ATR to calculate grid boundaries, specifically clamped to a minimum of **0.25%**. This allows high-frequency flipping in sideways markets.
+2. **Fee Coupon Mandatory**: Because the grid is incredibly tight (0.25%), the user *must* apply a Bithumb Fee Discount Coupon (0.04% fee). If normal fees apply (0.25%), trades will be unprofitable!
+3. **Execution Loop**: The bot polls Bithumb every **5 seconds**. This is NOT a bug or resource waste; it is absolutely necessary to catch rapid coin "wicks" and immediately place counter-orders on a 0.25% margin.
+4. **Auto-Compounding**: The bot recalculates the grid based on the user's total active Bithumb portfolio value, dynamically increasing lot sizes for snowball profits (capped by `MAX_BUDGET`).
+
+## 1. Check Status & Yield
 
 To check the current status, asset value, yield (%), and open orders, use the following local API:
 

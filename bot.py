@@ -147,10 +147,12 @@ def compute_atr_grid_spacing(ticker, default_spacing=0.01, period=14):
         # 그리드 간격은 보통 ATR의 50% ~ 100%를 사용 (여기서는 50%를 한 칸 간격으로 설정)
         dynamic_spacing = atr_percent * 0.5
         
-        # 최소 0.5%, 최대 3%로 제한 
-        dynamic_spacing = max(0.005, min(0.03, dynamic_spacing))
+        # [최적화] 최소 간격을 기존 0.5%에서 0.25%로 대폭 하향하여 횡보장에서도 회전율을 극대화
+        # 단, 차익 실현을 위해 빗썸 '수수료 쿠폰(0.04%)' 사용이 필수적임 (왕복 수수료 0.08% 제외하고 0.17%의 순수익 창출)
+        dynamic_spacing = max(0.0025, min(0.03, dynamic_spacing))
         
         logger.info(f"📊 Dynamic ATR Grid Spacing Calculated: {dynamic_spacing*100:.2f}% (Raw ATR%: {atr_percent*100:.2f}%)")
+        logger.info(f"💡 [Tip] 촘촘한 (0.25%) 간격 매매는 빗썸 '수수료 쿠폰'이 적용되어야 순수익이 극대화됩니다.")
         return dynamic_spacing
         
     except Exception as e:

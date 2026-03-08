@@ -51,7 +51,7 @@ Returns the Bithumb app-style real-time status of the bot's assets and open orde
 }
 ## Emergency Stop & Cancel All Orders
 
-If the user asks### POST `/stop`
+### POST `/stop`
 Gracefully halts the bot by preventing new orders, canceling all open orders, and killing the process.
 
 **Usage:**

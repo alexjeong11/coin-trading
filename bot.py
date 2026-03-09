@@ -8,6 +8,8 @@ import python_bithumb
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
   
 # 1. Logging Setup
 logger = logging.getLogger("GridBot")
@@ -40,32 +42,60 @@ STATE_FILE = "grid_state.json"
 
 try:
     INITIAL_BUDGET = float(os.getenv("INITIAL_BUDGET", "100000"))
-    MAX_BUDGET_CEILING = float(os.getenv("MAX_BUDGET", "200000"))
+    MAX_BUDGET_CEILING = float(os.getenv("MAX_BUDGET", "200000")) # 투자 상한선 설정 (예: 최대 20만 원까지만 자동 투자)
+
+    # [리밸런싱 기능] 일정 시간(시간) 동안 체결이 없으면 횡보/방치로 간주하고 그물망 재가설 (기본: 6시간)
+    RESET_TIMER_HOURS = float(os.getenv("RESET_TIMER_HOURS", "6"))
+
     GRID_COUNT = int(os.getenv("GRID_COUNT", "10"))
     GRID_STEP_RATIO = float(os.getenv("GRID_STEP_RATIO", "0.01"))
 except ValueError:
     logger.error("Invalid configuration in .env. Resorting to defaults.")
     INITIAL_BUDGET = 100000.0
     MAX_BUDGET_CEILING = 200000.0
+    RESET_TIMER_HOURS = 6.0
     GRID_COUNT = 10
     GRID_STEP_RATIO = 0.01
 
-ORDER_KRW = INITIAL_BUDGET / GRID_COUNT # approx 11,111 KRW per slot
-
 # 4. State Management
-def load_state():
+@dataclass
+class GridBotState:
+    grids: List[float]
+    slots: Dict[str, Any]
+    init_time: str
+    active_budget: float
+    lot_size: float
+    last_trade_time: float = 0.0  # 마지막 체결 시간 기록 (리밸런싱용)
+
+def load_state() -> Optional[GridBotState]:
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                return GridBotState(
+                    grids=data.get('grids', []), 
+                    slots=data.get('slots', {}),
+                    init_time=data.get('init_time', datetime.datetime.now().isoformat()),
+                    active_budget=data.get('active_budget', INITIAL_BUDGET),
+                    lot_size=data.get('lot_size', INITIAL_BUDGET / GRID_COUNT),
+                    last_trade_time=data.get('last_trade_time', time.time())
+                )
         except Exception as e:
             logger.error(f"Error loading state: {e}")
     return None
 
-def save_state(state):
+def save_state(state: GridBotState):
     try:
+        data = {
+            'grids': state.grids,
+            'slots': state.slots,
+            'init_time': state.init_time,
+            'active_budget': state.active_budget,
+            'lot_size': state.lot_size,
+            'last_trade_time': state.last_trade_time
+        }
         with open(STATE_FILE, "w") as f:
-            json.dump(state, f, indent=4)
+            json.dump(data, f, indent=4)
     except Exception as e:
         logger.error(f"Error saving state: {e}")
 
@@ -179,7 +209,7 @@ def round_to_tick(price):
     return round(price, 4)
 
 # 6. Grid Initialization & Logic
-def init_grid_bot():
+def init_grid_bot() -> Optional[GridBotState]:
     state = load_state()
     if state:
         logger.info("Existing grid state found. Resuming grid trading...")
@@ -190,7 +220,7 @@ def init_grid_bot():
     if not current_price:
         logger.error("Failed to fetch current price. Retrying...")
         time.sleep(5)
-        return False
+        return None
         
     # [전략 C 고도화] 자산 평가 기반 (Auto-Compounding) + 상한선 구조
     active_budget = INITIAL_BUDGET
@@ -281,16 +311,16 @@ def init_grid_bot():
         }
 
     # Market buy initial ETH required for the "ETH" slots
-    eth_to_buy_units = round(eth_to_buy_krw / current_price, 4)
-    # 가지고 있는 코인 수량을 차감하여 부족한 만큼만 매수
-    eth_to_buy_units = max(0.0, eth_to_buy_units - coin_total)
+    # eth_to_buy_units 는 소수점 4자리까지만 허용 (빗썸 최소수량 정책)
+    eth_to_buy_units = max(0.0, round(float(eth_to_buy_krw / current_price) - coin_total, 4))
+            
+    # eth_to_buy_units 가 0보다 크면 시장가 매수 진행
+    # 방어 2: 최소 주문금액(5000 KRW) 미만인 경우 빗썸에서 에러가 발생하므로, 
+    # 필요 금액이 5000원이 조금 넘도록(5100원 기준) 강제 보정
     krw_needed_to_buy = eth_to_buy_units * current_price
-    
-    # 빗썸 최소 주문금액 (5000원) 처리 + 슬리피지 버퍼: 조금이라도 사야한다면 최소 5100원어치 매수 (안전마진)
-    if 0 < krw_needed_to_buy < 5000:
+    if 0 < krw_needed_to_buy < 5100:
         eth_to_buy_units = round(5100 / current_price, 4)
-        krw_needed_to_buy = eth_to_buy_units * current_price
-        logger.info(f"Grid Initialization: Adjusted buy amount to meet 5000 KRW safe minimum.")
+        logger.warning(f"Initial buy amount adjusted to meet 5000 KRW minimum: {eth_to_buy_units} ETH")
 
     logger.info(f"Grid Initialization: Need to buy {eth_to_buy_units:.4f} ETH ({krw_needed_to_buy:,.0f} KRW) out of {coin_total:.4f} already owned.")
     
@@ -302,47 +332,47 @@ def init_grid_bot():
             logger.error(f"Failed to execute initial market buy: {e}")
         time.sleep(3) 
 
-    state = {
-        "grids": grids,
-        "slots": slots,
-        "init_time": datetime.datetime.now().isoformat(),
-        "active_budget": active_budget, # Store active budget
-        "lot_size": order_krw # Store lot size
-    }
-    save_state(state)
+    # 새 상태 저장 시 last_trade_time을 현재 시간으로 세팅하여 타이머 초기화 (시작점)
+    new_state = GridBotState(
+        grids=grids, 
+        slots=slots,
+        init_time=datetime.datetime.now().isoformat(),
+        active_budget=active_budget, 
+        lot_size=order_krw,
+        last_trade_time=time.time()
+    )
+    save_state(new_state)
     logger.info("Grid initialized and saved.")
-    return state
+    return new_state
 
-def place_limit_order(slot_id, slot_data):
+def place_limit_order(slot_id, slot_data, bot_state: GridBotState):
     """
     현재 slot_data의 state(KRW or ETH)에 맞는 지정가 주문을 생성합니다.
     (모든 주문은 지정가(Maker)로 진행)
     """
     time.sleep(0.3) # API Rate Limit 보호를 위한 지연 
     
-    # Retrieve lot_size from the current state (fallback to order_krw)
-    current_state = load_state()
-    if not current_state:
-        logger.error("Could not retrieve state. Cannot place order.")
-        return False
-        
-    order_krw = current_state.get("lot_size", ORDER_KRW)
+    order_krw = bot_state.lot_size
 
     try:
+        order_id = None # Initialize order_id
         if slot_data["state"] == "KRW":
-            price = slot_data["buy_price"]
-            volume = round(order_krw / price, 4) # Use dynamic order_krw
-            logger.info(f"Placing BUY Limit: Slot {slot_id} / Price: {price:,.0f} / Vol: {volume}")
-            order = bithumb.buy_limit_order(TICKER, price, volume)
-            order_id = extract_order_id(order)
+            # KRW를 가지고 매수(Buy) 대기 중
+            order_price = float(slot_data["buy_price"])
+            order_volume = round(float(order_krw / order_price), 4) # 소수점 4자리
+            result = bithumb.buy_limit_order(TICKER, order_price, order_volume)
+            logger.info(f"Slot {slot_id} - Placed BUY limit at {order_price:,.0f} KRW (Vol: {order_volume}).")
+            order_id = extract_order_id(result)
             
         elif slot_data["state"] == "ETH":
-            price = slot_data["sell_price"]
-            # 매도 볼륨은 매수했던 볼륨과 동일하게 설정하여 교차 차익(KRW)을 남김
-            volume = round(order_krw / slot_data["buy_price"], 4) # Use dynamic order_krw
-            logger.info(f"Placing SELL Limit: Slot {slot_id} / Price: {price:,.0f} / Vol: {volume}")
-            order = bithumb.sell_limit_order(TICKER, price, volume)
-            order_id = extract_order_id(order)
+            # ETH를 가지고 매도(Sell) 대기 중
+            # 매도 수량은 처음 샀던 가격 기준으로 산정된 주문금액(lot_size) 만큼을 다시 파는 개념
+            # 즉 11,000원어치를 샀으면, 팔때도 11,000원어치만 판다 (나머지 차액은 코인 수량으로 킵됨 = 복리 스노우볼)
+            order_price = float(slot_data["sell_price"])
+            order_volume = round(float(order_krw / slot_data["buy_price"]), 4) # 소수점 4자리
+            result = bithumb.sell_limit_order(TICKER, order_price, order_volume)
+            logger.info(f"Slot {slot_id} - Placed SELL limit at {order_price:,.0f} KRW (Vol: {order_volume}).")
+            order_id = extract_order_id(result)
             
         if order_id:
             slot_data["order_id"] = order_id
@@ -362,6 +392,24 @@ def place_limit_order(slot_id, slot_data):
         
     return False
 
+def cancel_all_orders(bot_state: GridBotState):
+    """모든 미체결 주문을 취소합니다."""
+    logger.info("Canceling all open orders...")
+    open_ids = get_open_order_ids()
+    if open_ids:
+        for order_id in open_ids:
+            try:
+                bithumb.cancel_order(order_id)
+                logger.info(f"Canceled order: {order_id}")
+                time.sleep(0.1) # API rate limit
+            except Exception as e:
+                logger.error(f"Error canceling order {order_id}: {e}")
+    # Clear order_ids from slots in state
+    for slot_data in bot_state.slots.values():
+        slot_data["order_id"] = None
+    save_state(bot_state)
+
+
 # 7. Main Loop
 def main():
     # TOTAL_BUDGET is no longer a global constant, it's dynamic.
@@ -372,15 +420,13 @@ def main():
         if not state: # init_grid_bot can return False on failure
             logger.error("Failed to initialize grid bot. Exiting.")
             return
+        bot_state = state # Use bot_state for clarity as it's a dataclass instance
             
-        # Fallback for old state files without active_budget
-        active_budget = state.get('active_budget', INITIAL_BUDGET)
-        logger.info(f"Starting Bithumb Grid Trading Bot ({TICKER})... Active Budget: {active_budget:,.0f} KRW")
+        logger.info(f"Starting Bithumb Grid Trading Bot ({TICKER})... Active Budget: {bot_state.active_budget:,.0f} KRW")
     except Exception as e:
         logger.error(f"Fatal error during initialization: {e}")
         return
 
-    slots = state["slots"]
     
     while True:
         try:
@@ -391,31 +437,34 @@ def main():
                 continue
                 
             current_price = get_current_price_retry(TICKER)
+            if not current_price:
+                logger.warning("Could not get current price, skipping this loop iteration.")
+                time.sleep(5)
+                continue
             
             # [전략 C] Out of Range 안전 장치
-            if current_price:
-                upper_bound = max(state["grids"])
-                lower_bound = min(state["grids"])
-                if current_price > upper_bound * 1.05 or current_price < lower_bound * 0.95:
-                    logger.warning(f"🚨🚨 Price Out of Range! Current: {current_price:,.0f}, Range: [{lower_bound:,.0f} ~ {upper_bound:,.0f}]")
-                    logger.warning("Canceling all orders and resetting grids with new dynamic ATR spacing...")
-                    # 모든 미체결 취소 
-                    for _slot_id, _slot_data in slots.items():
-                        _oid = _slot_data.get("order_id")
-                        if _oid and _oid in open_ids:
-                            bithumb.cancel_order(_oid)
-                            
-                    # 그리드 상태 완전 초기화 후 다음 루프에서 재생성 유도 
-                    if os.path.exists(STATE_FILE):
-                        os.remove(STATE_FILE)
-                    
-                    logger.warning("Bot will rebuild the grid around the new price on next tick.")
-                    # break 대신 빈 dict로 덮어씌워서 while루프 상단에서 새로 init되게 만듬
-                    state = {} # This will cause init_grid_bot to be called again
-                    break
+            upper_bound = max(bot_state.grids)
+            lower_bound = min(bot_state.grids)
+            if current_price > upper_bound * 1.05 or current_price < lower_bound * 0.95:
+                logger.warning(f"🚨🚨 Price Out of Range! Current: {current_price:,.0f}, Range: [{lower_bound:,.0f} ~ {upper_bound:,.0f}]")
+                logger.warning("Canceling all orders and resetting grids with new dynamic ATR spacing...")
+                
+                cancel_all_orders(bot_state)
+                
+                # 그리드 상태 완전 초기화 후 다음 루프에서 재생성 유도 
+                if os.path.exists(STATE_FILE):
+                    os.remove(STATE_FILE)
+                
+                logger.warning("Bot will rebuild the grid around the new price on next tick.")
+                # break 대신 빈 dict로 덮어씌워서 while루프 상단에서 새로 init되게 만듬
+                bot_state = init_grid_bot() # This will cause init_grid_bot to be called again
+                if not bot_state: # If re-initialization fails
+                    logger.error("Failed to re-initialize grid bot after price out of range. Exiting.")
+                    return
+                continue # Restart loop with new state
 
             state_changed = False
-            for slot_id, slot_data in slots.items():
+            for slot_id, slot_data in bot_state.slots.items():
                 current_order_id = slot_data.get("order_id")
                 
                 # 주문 내역이 없는 슬롯은 새로 생성
@@ -423,7 +472,7 @@ def main():
                     if slot_data.get("insufficient_funds"):
                         continue # 자금 부족으로 일시정지된 슬롯은 건너뜀
                         
-                    if place_limit_order(slot_id, slot_data):
+                    if place_limit_order(slot_id, slot_data, bot_state):
                         state_changed = True
                     continue
                 
@@ -443,10 +492,13 @@ def main():
                         
                         slot_data["order_id"] = None
                         
+                        # ⏰ [리밸런싱 타임 리셋] 체결이 발생했으므로 방치 타이머를 지금 이 순간으로 갱신
+                        bot_state.last_trade_time = time.time()
+
                         # 하나의 그리드라도 체결되면 자금 상황이 바뀌었으므로 정지된 모든 슬롯의 플래그를 해제하고 재시도
-                        for s_id in slots:
-                            if slots[s_id].get("insufficient_funds"):
-                                slots[s_id]["insufficient_funds"] = False
+                        for s_id in bot_state.slots:
+                            if bot_state.slots[s_id].get("insufficient_funds"):
+                                bot_state.slots[s_id]["insufficient_funds"] = False
                                 
                         state_changed = True
                         
@@ -459,15 +511,39 @@ def main():
                     # 다음 loop 에서 자동으로 해당 state에 맞는 주문이 다시 생성됨
                     
             if state_changed:
-                save_state(state)
+                save_state(bot_state)
             
             # 1시간 주기로 Alive 상태 로깅 
             now = datetime.datetime.now()
             if now.minute == 0 and now.second < 10:
                 cur_price = get_current_price_retry(TICKER)
-                logger.info(f"[System Alive] Current Time: {now}. {TICKER} Price: {cur_price}. Tracking {GRID_COUNT} slots.")
-                time.sleep(10)
+                logger.info(f"[System Alive] Current Time: {now}. {TICKER} Price: {cur_price}. Tracking {len(bot_state.slots)} slots.")
+                save_state(bot_state) # Ensure state is saved hourly even if no trades
+                time.sleep(10) # Sleep to avoid multiple logs within the same minute
                 
+            # ------------------------------------------------------------------
+            # [방어 2: 동적 리밸런싱 (Time-based Auto-Reset)]
+            # 마지막 체결(done) 시점으로부터 설정된 시간(RESET_TIMER_HOURS)이 지나면, 장기간 무거래 횡보상태(Zombie Grid)로 간주.
+            # 기존 체결 안된 그물을 모두 치우고 수수료 소비 없이 현재가를 중심으로 그물망을 새로 칠 준비를 합니다.
+            # ------------------------------------------------------------------
+            current_time = time.time()
+            hours_since_last_trade = (current_time - bot_state.last_trade_time) / 3600.0
+            
+            if hours_since_last_trade >= RESET_TIMER_HOURS:
+                logger.warning(f"⏳ [REBALANCING] No trades for {hours_since_last_trade:.1f} hours. The market is staggering.")
+                logger.warning(f"🔄 Canceling all zombie orders and rebuilding grid closer to Current Price: {current_price:,.0f} KRW")
+                cancel_all_orders(bot_state)
+                
+                # Remove state file to force a full re-initialization
+                if os.path.exists(STATE_FILE):
+                    os.remove(STATE_FILE)
+                
+                bot_state = init_grid_bot()
+                if not bot_state: # If re-initialization fails
+                    logger.error("Failed to re-initialize grid bot after idle timeout. Exiting.")
+                    return
+                continue # Restart loop with new state
+
             time.sleep(5) # 5초 간격 모니터링
             
         except Exception as e:

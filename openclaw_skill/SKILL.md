@@ -9,6 +9,9 @@ You can monitor and control the local Bithumb trading bot using its HTTP API. Th
 
 ### 💡 Core Technical Context (Crucial for AI Assistant)
 1. **Aggressive Grid Spacing**: The bot uses Dynamic ATR to calculate grid boundaries, specifically clamped to a minimum of **0.25%**. This allows high-frequency flipping in sideways markets.
+   - **Why 5-sec Polling?**: To maximize trades when prices flash above/below the 0.25% boundary. Wicks (꼬리) pass very fast, making sub-10s polling essential to win the Maker queue.
+   - **Fee Discretion**: The 0.25% margin works strictly because the host account uses Bithumb's fee discount (0.04% per trade). A 'standard' fee plan would eat all profit at this spacing.
+   - **Time-based Rebalancing (Zombie Grid Prevention)**: If no single trade happens for 6 hours (`RESET_TIMER_HOURS=6`), the bot cancels all current maker orders and recalculates the grid perfectly hugging the modern current price. Note that it will NEVER dump coins at market sell to reset; it mathematically covers its bags securely inside the new order-grid.
 2. **Fee Coupon Mandatory**: Because the grid is incredibly tight (0.25%), the user *must* apply a Bithumb Fee Discount Coupon (0.04% fee). If normal fees apply (0.25%), trades will be unprofitable!
 3. **Execution Loop**: The bot polls Bithumb every **5 seconds**. This is NOT a bug or resource waste; it is absolutely necessary to catch rapid coin "wicks" and immediately place counter-orders on a 0.25% margin.
 4. **Auto-Compounding**: The bot recalculates the grid based on the user's total active Bithumb portfolio value, dynamically increasing lot sizes for snowball profits (capped by `MAX_BUDGET`).

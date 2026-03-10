@@ -8,7 +8,7 @@ description: Bithumb Trading Bot Status & Control Skill
 You can monitor and control the local Bithumb trading bot using its HTTP API. The bot operates on `KRW-ETH` using an aggressively tight Grid Trading strategy.
 
 ### 💡 Core Technical Context (Crucial for AI Assistant)
-1. **Aggressive Grid Spacing**: The bot uses Dynamic ATR to calculate grid boundaries, specifically clamped to a minimum of **0.25%**. This allows high-frequency flipping in sideways markets.
+1. **Aggressive Grid Spacing**: The bot uses Dynamic ATR to calculate grid boundaries, specifically clamped to a minimum of **0.25%** and a maximum of **0.5%**. This allows high-frequency flipping in sideways markets and prevents excessively wide "zombie" grids during high volatility.
    - **Why 5-sec Polling?**: To maximize trades when prices flash above/below the 0.25% boundary. Wicks (꼬리) pass very fast, making sub-10s polling essential to win the Maker queue.
    - **Fee Discretion**: The 0.25% margin works strictly because the host account uses Bithumb's fee discount (0.04% per trade). A 'standard' fee plan would eat all profit at this spacing.
    - **Time-based Rebalancing (Zombie Grid Prevention)**: If no single trade happens for 6 hours (`RESET_TIMER_HOURS=6`), the bot cancels all current maker orders and recalculates the grid perfectly hugging the modern current price. Note that it will NEVER dump coins at market sell to reset; it mathematically covers its bags securely inside the new order-grid.

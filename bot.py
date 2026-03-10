@@ -179,7 +179,7 @@ def compute_atr_grid_spacing(ticker, default_spacing=0.01, period=14):
         
         # [최적화] 최소 간격을 기존 0.5%에서 0.25%로 대폭 하향하여 횡보장에서도 회전율을 극대화
         # 단, 차익 실현을 위해 빗썸 '수수료 쿠폰(0.04%)' 사용이 필수적임 (왕복 수수료 0.08% 제외하고 0.17%의 순수익 창출)
-        dynamic_spacing = max(0.0025, min(0.03, dynamic_spacing))
+        dynamic_spacing = max(0.0025, min(0.005, dynamic_spacing))
         
         logger.info(f"📊 Dynamic ATR Grid Spacing Calculated: {dynamic_spacing*100:.2f}% (Raw ATR%: {atr_percent*100:.2f}%)")
         logger.info(f"💡 [Tip] 촘촘한 (0.25%) 간격 매매는 빗썸 '수수료 쿠폰'이 적용되어야 순수익이 극대화됩니다.")
@@ -378,8 +378,8 @@ def place_limit_order(slot_id, slot_data, bot_state: GridBotState):
             slot_data["order_id"] = order_id
             return True
         else:
-            logger.warning(f"Failed to place limit order for Slot {slot_id}. Response: {order}")
-            if "insufficient_funds" in str(order).lower() or "주문가능한" in str(order):
+            logger.warning(f"Failed to place limit order for Slot {slot_id}. Response: {result}")
+            if "insufficient_funds" in str(result).lower() or "주문가능한" in str(result):
                 slot_data["insufficient_funds"] = True
                 logger.warning(f"Slot {slot_id} paused due to insufficient funds.")
     except Exception as e:

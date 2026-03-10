@@ -19,7 +19,7 @@ echo "🟢 봇 및 API 서버 재가동 중..."
 source venv/bin/activate
 
 # 기존 로그 백업 후 백그라운드 실행
-nohup python bot.py >> nohup.out 2>&1 &
-nohup python api_server.py >> nohup_api.out 2>&1 &
+nohup python -u bot.py >> nohup.out 2>&1 &
+nohup python -u api_server.py >> nohup_api.out 2>&1 &
 
 echo "✅ 배포 완료! 자동매매 봇과 API 서버가 최신 로직으로 구동되었습니다."

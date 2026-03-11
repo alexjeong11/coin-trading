@@ -7,8 +7,20 @@ from fastapi import FastAPI, HTTPException, Body
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import math
+import logging
+from logging.handlers import TimedRotatingFileHandler
 
-# 1. Config & Env
+# 1. Logging Setup
+logger = logging.getLogger("ApiServer")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Rotate log daily at midnight. backupCount=0 means never automatically delete old logs.
+file_handler = TimedRotatingFileHandler("api.log", when="midnight", interval=1, backupCount=0, encoding="utf-8")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# 2. Config & Env
 load_dotenv()
 CON_KEY = os.getenv("BITHUMB_CON_KEY")
 SEC_KEY = os.getenv("BITHUMB_SEC_KEY")

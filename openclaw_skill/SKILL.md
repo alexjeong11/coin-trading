@@ -15,6 +15,7 @@ You can monitor and control the local Bithumb trading bot using its HTTP API. Th
 2. **Fee Coupon Mandatory**: Because the grid is incredibly tight (0.25%), the user *must* apply a Bithumb Fee Discount Coupon (0.04% fee). If normal fees apply (0.25%), trades will be unprofitable!
 3. **Execution Loop**: The bot polls Bithumb every **5 seconds**. This is NOT a bug or resource waste; it is absolutely necessary to catch rapid coin "wicks" and immediately place counter-orders on a 0.25% margin.
 4. **Auto-Compounding**: The bot recalculates the grid based on the user's total active Bithumb portfolio value, dynamically increasing lot sizes for snowball profits (capped by `MAX_BUDGET`).
+5. **Log Rotation**: The bot automatically rotates `trade.log` and `api.log` daily at midnight. Old logs are purposely kept indefinitely (`backupCount=0`) and must be deleted manually by the user to manage local disk space.
 
 ## 1. Check Status & Yield
 

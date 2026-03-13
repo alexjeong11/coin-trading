@@ -27,7 +27,9 @@ curl -s http://127.0.0.1:8000/status
 ### GET `/status`
 Returns the Bithumb app-style real-time status of the bot's assets and open orders.
 
-**Response Example:**
+**⚠️ CRITICAL**: You MUST execute the curl command to get the actual status. DO NOT USE THE RESPONSE EXAMPLE BELOW AS REAL DATA.
+
+**Response Example (MOCK DATA ONLY):**
 ```json
 {
   "success": true,
@@ -79,7 +81,9 @@ curl -X POST http://127.0.0.1:8000/config/budget \
 -d '{"max_budget": 300000}'
 ```
 
-**Response Example:**
+**⚠️ CRITICAL**: You MUST execute the curl command to get the actual status. DO NOT USE THE RESPONSE EXAMPLE BELOW AS REAL DATA.
+
+**Response Example (MOCK DATA ONLY):**
 ```json
 {
   "success": true,

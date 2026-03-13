@@ -278,9 +278,13 @@ def init_grid_bot() -> Optional[GridBotState]:
     # 현재가 포함
     grids.append(current_price)
     
-    # 상단 가격대
+    # 상단 가격대 (비대칭적 지수 확장 적용 - Option 3)
+    growth_factor = 1.0
+    accumulated_spacing = 0.0
     for i in range(1, num_price_points - half_points):
-        grids.append(current_price * (1 + dynamic_spacing * i))
+        accumulated_spacing += dynamic_spacing * growth_factor
+        grids.append(current_price * (1 + accumulated_spacing))
+        growth_factor *= 1.5 # 다음 간격은 1.5배 더 벌어짐
     
     # 빗썸 호가단위에 맞춰 반올림 후 중복제거
     grids = [round_to_tick(p) for p in grids]

@@ -271,20 +271,39 @@ def init_grid_bot() -> Optional[GridBotState]:
     half_points = num_price_points // 2
     grids = []
     
-    # 하단 가격대
-    for i in range(half_points, 0, -1):
-        grids.append(current_price * (1 - dynamic_spacing * i))
+    # 1. 하단 가격대 (가변 탄력성 방어막 - Elastic Buy Grid)
+    down_grids = []
+    down_accumulated = 0.0
+    down_growth = 1.0
+    for i in range(1, half_points + 1):
+        if i <= 2:
+            step = dynamic_spacing
+        else:
+            down_growth *= 1.5
+            step = dynamic_spacing * down_growth
         
-    # 현재가 포함
+        down_accumulated += step
+        down_grids.insert(0, current_price * (1 - down_accumulated))
+        
+    grids.extend(down_grids)
+        
+    # 2. 현재가 포함
     grids.append(current_price)
     
-    # 상단 가격대 (비대칭적 지수 확장 적용 - Option 3)
-    growth_factor = 1.0
-    accumulated_spacing = 0.0
+    # 3. 상단 가격대 (하이퍼 스캘핑 + 능동형 코어 장기 홀딩)
+    up_accumulated = 0.0
+    up_growth = 1.0
     for i in range(1, num_price_points - half_points):
-        accumulated_spacing += dynamic_spacing * growth_factor
-        grids.append(current_price * (1 + accumulated_spacing))
-        growth_factor *= 1.5 # 다음 간격은 1.5배 더 벌어짐
+        if i <= 2:
+            # 1~2번 익절 슬롯은 0.15%~0.2% 극초단타 마진 고정
+            step = min(0.002, dynamic_spacing)
+        else:
+            # 3번 이상 물량(코어)은 2.5배 지수 확장으로 엄청난 상승장에서만 익절
+            up_growth *= 2.5 
+            step = dynamic_spacing * up_growth
+            
+        up_accumulated += step
+        grids.append(current_price * (1 + up_accumulated))
     
     # 빗썸 호가단위에 맞춰 반올림 후 중복제거
     grids = [round_to_tick(p) for p in grids]

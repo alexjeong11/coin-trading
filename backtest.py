@@ -188,10 +188,39 @@ def run_backtest():
         growth_factor *= 1.5
     grids_asym = sorted(list(set([round_to_tick(p) for p in grids_asym])))
     
+    # 3. Hybrid Grids (A+B Yield Booster)
+    grids_hybrid = []
+    down_accumulated = 0.0
+    down_growth = 1.0
+    for i in range(1, half_points + 1):
+        if i <= 2:
+            step = dynamic_spacing
+        else:
+            down_growth *= 1.5
+            step = dynamic_spacing * down_growth
+        down_accumulated += step
+        grids_hybrid.insert(0, start_price * (1 - down_accumulated))
+    grids_hybrid.append(start_price)
+    
+    up_accumulated = 0.0
+    up_growth = 1.0
+    for i in range(1, num_price_points - half_points):
+        if i <= 2:
+            step = min(0.002, dynamic_spacing)
+        else:
+            up_growth *= 2.5 
+            step = dynamic_spacing * up_growth
+        up_accumulated += step
+        grids_hybrid.append(start_price * (1 + up_accumulated))
+        
+    grids_hybrid = sorted(list(set([round_to_tick(p) for p in grids_hybrid])))
+    
     test_df = df.iloc[start_idx:]
     
     simulate(test_df, grids_linear, start_price, "Linear Grid (Old)")
-    simulate(test_df, grids_asym, start_price, "Asymmetric Grid (New)")
+    simulate(test_df, grids_asym, start_price, "Asymmetric Grid (Option 3)")
+    simulate(test_df, grids_hybrid, start_price, "Hybrid A+B Grid (New)")
+
 
 if __name__ == "__main__":
     run_backtest()

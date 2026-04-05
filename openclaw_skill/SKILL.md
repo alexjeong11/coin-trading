@@ -120,6 +120,23 @@ tail -n 30 nohup.out
 
 ---
 
+
+## 3. Daily AI Reporting & Tuning Agent
+
+If the user asks for a "Daily Report" (일일 분석) or "Performance Review":
+1. **Fetch Data**: Call `GET http://127.0.0.1:8000/report/daily` to get exact mathematical raw data (buy/sells, max idle gap, trend).
+2. **LLM Analysis Role**: You must act as a Financial Bot Advisor. Formulate a friendly message summarizing the stats.
+3. **Provide Intelligence/Heuristics**:
+   - If `max_idle_gap_hours` > 5: Explain that capital efficiency is low, suggest lowering `RESET_TIMER_HOURS`.
+   - If `sell_executions` < 2 in a Sideways market: Suggest lowering `GRID_STEP_RATIO` marginally for tighter scalping.
+4. **Tuning Authorization**: Inform the user: "If you agree, tell me and I will apply this tuning automatically."
+
+If the user agrees to tune the parameters, use the following API:
+### POST `/config/tune`
+```bash
+curl -X POST http://127.0.0.1:8000/config/tune -H "Content-Type: application/json" -d "{"key": "RESET_TIMER_HOURS", "value": "3"}"
+```
+
 ## Behavior Rules
 
 1. **Status Checks**: When the user asks for the status, call the HTTP `/status` endpoint and format the JSON response nicely, showing the current price, asset evaluation (quantity, avg buy price, PnL, yield), and the KRW status.

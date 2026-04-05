@@ -194,6 +194,104 @@ def update_max_budget(config: BudgetUpdate = Body(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@app.get("/report/daily")
+def daily_report():
+    """Reads the most recent trade.log and returns raw trading metrics for LLM analysis."""
+    import re as regex, datetime, os, glob
+    try:
+        log_files = sorted(glob.glob("trade.log*"), reverse=True)
+        lines = []
+        for f in log_files:
+            if os.path.exists(f):
+                with open(f, "r") as file:
+                    lines = file.readlines()
+                if any("Filled at" in l for l in lines):
+                    break 
+                    
+        buys = 0
+        sells = 0
+        prices = []
+        times = []
+        
+        for line in lines:
+            if "BUY Filled at" in line:
+                buys += 1
+                m = regex.search(r"BUY Filled at ([\d,\.]+) KRW", line)
+                if m: prices.append(float(m.group(1).replace(",", "")))
+                try: times.append(datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+                except: pass
+            elif "SELL Filled at" in line:
+                sells += 1
+                m = regex.search(r"SELL Filled at ([\d,\.]+) KRW", line)
+                if m: prices.append(float(m.group(1).replace(",", "")))
+                try: times.append(datetime.datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+                except: pass
+                
+        if not prices:
+            return {"success": False, "message": "No executed trades found in recent logs."}
+            
+        start_p = prices[0]
+        end_p = prices[-1]
+        diff_pct = (end_p / start_p) - 1.0
+        
+        max_gap = 0
+        for i in range(1, len(times)):
+            gap = (times[i] - times[i-1]).total_seconds()
+            if gap > max_gap: max_gap = gap
+            
+        return {
+            "success": True,
+            "period_trend": "Uptrend" if diff_pct > 0.015 else ("Downtrend" if diff_pct < -0.015 else "Sideways"),
+            "price_change_percent": round(diff_pct * 100, 2),
+            "start_price_krw": start_p,
+            "end_price_krw": end_p,
+            "total_executions": buys + sells,
+            "buy_executions": buys,
+            "sell_executions": sells,
+            "max_idle_gap_hours": round(max_gap / 3600.0, 2)
+        }
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+class TuneUpdate(BaseModel):
+    key: str
+    value: str
+
+@app.post("/config/tune")
+def tune_env_config(config: TuneUpdate = Body(...)):
+    """Update generic .env key dynamically via LLM Agent"""
+    try:
+        env_file = ".env"
+        if not os.path.exists(env_file): return {"success": False, "detail": ".env not found"}
+            
+        with open(env_file, "r") as f:
+            lines = f.readlines()
+            
+        key_found = False
+        with open(env_file, "w") as f:
+            for line in lines:
+                if line.startswith(f"{config.key}="):
+                    f.write(f"{config.key}="{config.value}"
+")
+                    key_found = True
+                else:
+                    f.write(line)
+            
+            if not key_found:
+                f.write(f"
+{config.key}="{config.value}"
+")
+                
+        if os.path.exists("grid_state.json"):
+            os.remove("grid_state.json")
+            
+        return {"success": True, "message": f"{config.key} updated to {config.value}. Bot grid will reset shortly."}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/stop")
 def stop_bot():
     """매매 봇 프로세스 강제 종료 및 모든 미체결 주문 취소"""

@@ -556,6 +556,17 @@ def main():
             hours_since_last_trade = (current_time - bot_state.last_trade_time) / 3600.0
             
             if hours_since_last_trade >= RESET_TIMER_HOURS:
+                # [버그 픽스] 상승장에서 봇이 익절을 대기 중일 때 강제 리셋을 방지
+                # 그리드의 중간값(center)을 기준으로 현재가가 높으면 상승장으로 간주
+                original_center = bot_state.grids[len(bot_state.grids) // 2]
+                if current_price > original_center:
+                    logger.info(f"⏳ [REBALANCING SKIP] Uptrend waiting (Current: {current_price:,.0f} > Center: {original_center:,.0f}). Not resetting to avoid buying high.")
+                    # 타이머만 리셋하여 지속적인 중복 로그 스팸 방지
+                    bot_state.last_trade_time = current_time
+                    save_state(bot_state)
+                    time.sleep(5)
+                    continue
+
                 logger.warning(f"⏳ [REBALANCING] No trades for {hours_since_last_trade:.1f} hours. The market is staggering.")
                 logger.warning(f"🔄 Canceling all zombie orders and rebuilding grid closer to Current Price: {current_price:,.0f} KRW")
                 cancel_all_orders(bot_state)

@@ -298,8 +298,8 @@ def init_grid_bot() -> Optional[GridBotState]:
             # 1~2번 익절 슬롯은 0.15%~0.2% 극초단타 마진 고정
             step = min(0.002, dynamic_spacing)
         else:
-            # 3번 이상 물량(코어)은 2.5배 지수 확장으로 엄청난 상승장에서만 익절
-            up_growth *= 2.5 
+            # 3번 이상 물량(코어)은 1.5배 지수 확장으로 보합/반등장에서 더 자주 익절하여 자본 회전율 향상
+            up_growth *= 1.5 
             step = dynamic_spacing * up_growth
             
         up_accumulated += step
@@ -556,30 +556,45 @@ def main():
             hours_since_last_trade = (current_time - bot_state.last_trade_time) / 3600.0
             
             if hours_since_last_trade >= RESET_TIMER_HOURS:
-                # [버그 픽스] 상승장에서 봇이 익절을 대기 중일 때 강제 리셋을 방지
-                # 그리드의 중간값(center)을 기준으로 현재가가 높으면 상승장으로 간주
-                original_center = bot_state.grids[len(bot_state.grids) // 2]
-                if current_price > original_center:
-                    logger.info(f"⏳ [REBALANCING SKIP] Uptrend waiting (Current: {current_price:,.0f} > Center: {original_center:,.0f}). Not resetting to avoid buying high.")
-                    # 타이머만 리셋하여 지속적인 중복 로그 스팸 방지
-                    bot_state.last_trade_time = current_time
-                    save_state(bot_state)
-                    time.sleep(5)
-                    continue
-
-                logger.warning(f"⏳ [REBALANCING] No trades for {hours_since_last_trade:.1f} hours. The market is staggering.")
-                logger.warning(f"🔄 Canceling all zombie orders and rebuilding grid closer to Current Price: {current_price:,.0f} KRW")
+                logger.warning(f"⏳ [PARTIAL REBALANCING] Idle for {hours_since_last_trade:.1f} hours. Migrating KRW slots to hover below {current_price:,.0f} KRW.")
+                
                 cancel_all_orders(bot_state)
                 
-                # Remove state file to force a full re-initialization
-                if os.path.exists(STATE_FILE):
-                    os.remove(STATE_FILE)
-                
-                bot_state = init_grid_bot()
-                if not bot_state: # If re-initialization fails
-                    logger.error("Failed to re-initialize grid bot after idle timeout. Exiting.")
-                    return
-                continue # Restart loop with new state
+                krw_slots = [s_id for s_id, s_data in bot_state.slots.items() if s_data["state"] == "KRW"]
+                if krw_slots:
+                    krw_slots = sorted(krw_slots, key=int)
+                    
+                    dynamic_spacing = compute_atr_grid_spacing(TICKER, default_spacing=GRID_STEP_RATIO)
+                    new_buy_grids = []
+                    down_accumulated = 0.0
+                    down_growth = 1.0
+                    for i in range(len(krw_slots)):
+                        if i < 2:
+                            step = min(0.0025, dynamic_spacing)
+                        else:
+                            down_growth *= 1.5
+                            step = dynamic_spacing * down_growth
+                        down_accumulated += step
+                        new_buy_grids.append(current_price * (1 - down_accumulated))
+                    
+                    new_buy_grids = [round_to_tick(p) for p in new_buy_grids]
+                    new_buy_grids.sort(reverse=True)
+                    
+                    for i, s_id in enumerate(krw_slots):
+                        if i < len(new_buy_grids):
+                            buy_p = new_buy_grids[i]
+                            sell_p = buy_p * (1 + min(0.005, dynamic_spacing * 1.5))
+                            
+                            bot_state.slots[s_id]["buy_price"] = buy_p
+                            bot_state.slots[s_id]["sell_price"] = round_to_tick(sell_p)
+                    
+                    logger.info(f"✅ Executed Trailing Scalp: {len(krw_slots)} KRW slots migrated. Existing ETH positions are 100% PRESERVED!")
+                else:
+                    logger.info("No KRW slots available for trailing. All funds are in ETH waiting for high targets.")
+                    
+                bot_state.last_trade_time = current_time
+                save_state(bot_state)
+                continue
 
             time.sleep(5) # 5초 간격 모니터링
             

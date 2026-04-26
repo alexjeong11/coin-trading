@@ -4,6 +4,7 @@ import time
 import subprocess
 import python_bithumb
 from fastapi import FastAPI, HTTPException, Body
+from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import math
@@ -158,6 +159,199 @@ def status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/dashboard", response_class=HTMLResponse)
+def get_dashboard():
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Trading Bot ROI Dashboard</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .kpi-container { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
+            .kpi-card { background: white; border-radius: 10px; padding: 20px; flex: 1; min-width: 200px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-left: 5px solid #3498db; }
+            .kpi-title { font-size: 14px; color: #7f8c8d; text-transform: uppercase; font-weight: bold; margin-bottom: 10px; }
+            .kpi-value { font-size: 28px; font-weight: bold; color: #2c3e50; }
+            .kpi-sub { font-size: 14px; margin-top: 5px; }
+            .positive { color: #27ae60; }
+            .negative { color: #e74c3c; }
+            .chart-card { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 30px; }
+            table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+            th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background-color: #f8f9fa; color: #2c3e50; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1 style="color: #2c3e50; margin-bottom: 30px;">🚀 Bithumb Trading Bot Yield Dashboard</h1>
+            
+            <div class="kpi-container" id="kpis">
+                <div class="kpi-card">Loading...</div>
+            </div>
+            
+            <div class="chart-card">
+                <canvas id="yieldChart" height="100"></canvas>
+            </div>
+            
+            <h2 style="color: #2c3e50; margin-bottom: 20px;">📅 Daily History</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Total Asset (KRW)</th>
+                        <th>Daily PnL</th>
+                        <th>ETH Price (KRW)</th>
+                    </tr>
+                </thead>
+                <tbody id="historyTable">
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            async function fetchData() {
+                try {
+                    const response = await fetch('/api/history');
+                    const data = await response.json();
+                    renderDashboard(data);
+                } catch (e) {
+                    console.error("Error fetching data:", e);
+                }
+            }
+
+            function renderDashboard(data) {
+                if (!data || data.length === 0) return;
+                
+                const latest = data[data.length - 1];
+                const initial_asset = 320000;
+                const net_pnl = latest.total_asset - initial_asset;
+                const net_pnl_pct = (net_pnl / initial_asset) * 100;
+                const pnlClass = net_pnl >= 0 ? 'positive' : 'negative';
+                const pnlSign = net_pnl > 0 ? '+' : '';
+
+                document.getElementById('kpis').innerHTML = `
+                    <div class="kpi-card" style="border-left-color: #3498db;">
+                        <div class="kpi-title">Total Complete Asset</div>
+                        <div class="kpi-value">${latest.total_asset.toLocaleString()} ₩</div>
+                        <div class="kpi-sub">KRW + ETH Complete Value</div>
+                    </div>
+                    <div class="kpi-card" style="border-left-color: #95a5a6;">
+                        <div class="kpi-title">Initial Principal</div>
+                        <div class="kpi-value">${initial_asset.toLocaleString()} ₩</div>
+                        <div class="kpi-sub">Total Base Invested</div>
+                    </div>
+                    <div class="kpi-card" style="border-left-color: ${net_pnl >= 0 ? '#27ae60' : '#e74c3c'};">
+                        <div class="kpi-title">Cumulative Net PnL</div>
+                        <div class="kpi-value ${pnlClass}">${pnlSign}${net_pnl.toLocaleString()} ₩</div>
+                        <div class="kpi-sub ${pnlClass}">ROI: ${pnlSign}${net_pnl_pct.toFixed(2)}%</div>
+                    </div>
+                    <div class="kpi-card" style="border-left-color: #e67e22;">
+                        <div class="kpi-title">Current ETH Price</div>
+                        <div class="kpi-value">${latest.eth_price.toLocaleString()} ₩</div>
+                        <div class="kpi-sub">Market Benchmark</div>
+                    </div>
+                `;
+
+                const tbody = document.getElementById('historyTable');
+                let tableHtml = '';
+                for (let i = data.length - 1; i >= 0; i--) {
+                    const row = data[i];
+                    let dailyPnl = '-';
+                    let dailyPnlStr = '-';
+                    let dailyClass = '';
+                    if (i > 0) {
+                        dailyPnl = row.total_asset - data[i-1].total_asset;
+                        dailyClass = dailyPnl >= 0 ? 'positive' : 'negative';
+                        dailyPnlStr = (dailyPnl > 0 ? '+' : '') + dailyPnl.toLocaleString() + ' ₩';
+                    }
+                    tableHtml += `
+                        <tr>
+                            <td>${row.date}</td>
+                            <td style="font-weight: bold; color: #2c3e50;">${row.total_asset.toLocaleString()} ₩</td>
+                            <td class="${dailyClass}">${dailyPnlStr}</td>
+                            <td>${row.eth_price.toLocaleString()} ₩</td>
+                        </tr>
+                    `;
+                }
+                tbody.innerHTML = tableHtml;
+
+                const minAsset = Math.floor(Math.min(...data.map(d => d.total_asset)) * 0.95);
+                const minPrice = Math.floor(Math.min(...data.map(d => d.eth_price)) * 0.95);
+
+                const ctx = document.getElementById('yieldChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.map(d => d.date.substring(5)),
+                        datasets: [
+                            {
+                                label: 'Total Asset (KRW)',
+                                data: data.map(d => d.total_asset),
+                                backgroundColor: 'rgba(52, 152, 219, 0.7)',
+                                borderColor: 'rgba(41, 128, 185, 1)',
+                                borderWidth: 1,
+                                borderRadius: 4,
+                                yAxisID: 'y',
+                                order: 2
+                            },
+                            {
+                                label: 'ETH Price (KRW)',
+                                data: data.map(d => d.eth_price),
+                                type: 'line',
+                                borderColor: 'rgba(230, 126, 34, 1)',
+                                backgroundColor: 'rgba(230, 126, 34, 0.1)',
+                                borderWidth: 3,
+                                fill: true,
+                                pointBackgroundColor: 'rgba(230, 126, 34, 1)',
+                                yAxisID: 'y1',
+                                order: 1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: { display: true, text: 'Total Asset (Won)' },
+                                min: minAsset
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: { display: true, text: 'ETH Market Price' },
+                                grid: { drawOnChartArea: false },
+                                min: minPrice
+                            }
+                        }
+                    }
+                });
+            }
+            fetchData();
+        </script>
+    </body>
+    </html>
+    """
+    return html_content
+
+@app.get("/api/history")
+def get_history():
+    try:
+        if os.path.exists("asset_history.json"):
+            with open("asset_history.json", "r") as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        return []
+
 @app.post("/config/budget")
 def update_max_budget(config: BudgetUpdate = Body(...)):
     """Update the MAX_BUDGET ceiling in .env dynamically"""
@@ -273,16 +467,13 @@ def tune_env_config(config: TuneUpdate = Body(...)):
         with open(env_file, "w") as f:
             for line in lines:
                 if line.startswith(f"{config.key}="):
-                    f.write(f"{config.key}="{config.value}"
-")
+                    f.write(f'{config.key}="{config.value}"\n')
                     key_found = True
                 else:
                     f.write(line)
             
             if not key_found:
-                f.write(f"
-{config.key}="{config.value}"
-")
+                f.write(f"\n{config.key}=\"{config.value}\"\n")
                 
         if os.path.exists("grid_state.json"):
             os.remove("grid_state.json")

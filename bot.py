@@ -241,6 +241,29 @@ def init_grid_bot() -> Optional[GridBotState]:
             
             # evaluate total asset
             total_eval_krw = krw_total + (coin_total * current_price)
+            
+            # --- DAILY ASSET SNAPSHOT (For Web Dashboard) ---
+            try:
+                today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+                history_file = "asset_history.json"
+                history = []
+                if os.path.exists(history_file):
+                    with open(history_file, 'r') as f:
+                        try:
+                            history = json.load(f)
+                        except:
+                            pass
+                if not history or history[-1].get("date") != today_str:
+                    history.append({
+                        "date": today_str,
+                        "total_asset": round(total_eval_krw),
+                        "eth_price": float(current_price)
+                    })
+                    with open(history_file, 'w') as f:
+                        json.dump(history, f, indent=4)
+                    logger.info(f"📊 Daily Asset Snapshot Saved - Date: {today_str}, Total: {total_eval_krw:,.0f} KRW")
+            except Exception as e:
+                logger.error(f"Error saving daily asset snapshot: {e}")
             # Active budget is capped by MAX_BUDGET_CEILING
             active_budget = min(total_eval_krw, MAX_BUDGET_CEILING)
             

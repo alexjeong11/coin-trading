@@ -231,6 +231,7 @@ def init_grid_bot() -> Optional[GridBotState]:
     try:
         krw_total = 0.0
         coin_total = 0.0
+        avg_buy_price = 0.0
         bals = bithumb.get_balances()
         if type(bals) is list:
             for b in bals:
@@ -238,6 +239,7 @@ def init_grid_bot() -> Optional[GridBotState]:
                     krw_total = float(b.get('balance', 0)) + float(b.get('locked', 0))
                 elif b.get('currency') == TARGET_COIN:
                     coin_total = float(b.get('balance', 0)) + float(b.get('locked', 0))
+                    avg_buy_price = float(b.get('avg_buy_price', 0))
             
             # evaluate total asset
             total_eval_krw = krw_total + (coin_total * current_price)
@@ -350,6 +352,13 @@ def init_grid_bot() -> Optional[GridBotState]:
             slot_state = "KRW"
         else:
             slot_state = "ETH"
+            
+            # [No-Loss Guarantee] 절대 평단가+0.25% 이하로는 매도망을 생성하지 않음
+            if avg_buy_price > 0:
+                min_sell_price = round_to_tick(avg_buy_price * 1.0025)
+                if sell_price < min_sell_price:
+                    sell_price = min_sell_price
+            
             eth_to_buy_krw += order_krw # Use dynamic order_krw
             
         slots[str(i)] = {

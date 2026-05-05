@@ -18,7 +18,8 @@ logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 # Rotate log daily at midnight. backupCount=0 means never automatically delete old logs.
-file_handler = TimedRotatingFileHandler("trade.log", when="midnight", interval=1, backupCount=0, encoding="utf-8")
+os.makedirs("trade_logs", exist_ok=True)
+file_handler = TimedRotatingFileHandler("trade_logs/trade.log", when="midnight", interval=1, backupCount=0, encoding="utf-8")
 file_handler.setFormatter(formatter)
 
 console_handler = logging.StreamHandler()

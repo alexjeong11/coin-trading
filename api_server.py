@@ -394,7 +394,7 @@ def daily_report():
     """Reads the most recent trade.log and returns raw trading metrics for LLM analysis."""
     import re as regex, datetime, os, glob
     try:
-        log_files = sorted(glob.glob("trade.log*"), reverse=True)
+        log_files = sorted(glob.glob("trade_logs/trade.log*"), reverse=True)
         lines = []
         for f in log_files:
             if os.path.exists(f):
